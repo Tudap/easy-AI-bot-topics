@@ -4,8 +4,8 @@ import { dbService } from '../db/index.js';
 import {
   buildConversationContext,
   formatUserName,
-  getThreadId,
 } from '../services/reply-chain.js';
+import { getTopicInfo } from '../services/topic.js';
 import { generateAIResponse } from '../services/ai.js';
 import { formatAIResponseToHTML } from '../utils/html.js';
 import { sendLongMessage } from '../utils/chunker.js';
@@ -52,11 +52,12 @@ export async function handleIncomingMessage(ctx: Context): Promise<void> {
   if (!message) return;
 
   const botUsername = ctx.me.username;
-  const threadId = getThreadId(ctx);
+  const topicInfo = getTopicInfo(ctx);
+  const threadId = topicInfo.storageThreadId;
   const currentUserName = formatUserName(message.from);
   const rawText = message.text || message.caption || '';
 
-  // Сохраняем сообщение в SQLite для возможности восстановления контекста цепочек
+  // Сохраняем сообщение в SQLite для возможности восстановления контекста темы
   dbService.saveMessage({
     threadId,
     msgId: message.message_id,
@@ -71,10 +72,10 @@ export async function handleIncomingMessage(ctx: Context): Promise<void> {
     return;
   }
 
-  // Если это команда (например, неизвестная или необработанная в command.ts),
-  // но начинается с /, и не содержит упоминания - пропускаем, если не наш случай
+  // Если это известная команда бота, но без прямого упоминания, пропускаем
+  // (она уже перехвачена bot.command(...) в index.ts)
   if (message.text?.startsWith('/') && !message.text.includes(`@${botUsername}`)) {
-    const commandName = message.text.split(' ')[0].replace('/', '');
+    const commandName = message.text.split(' ')[0].replace('/', '').toLowerCase();
     const knownCommands = [
       'help',
       'start',
@@ -87,14 +88,15 @@ export async function handleIncomingMessage(ctx: Context): Promise<void> {
       'status',
       'model',
       'models',
+      'topic',
+      'thread',
     ];
     if (knownCommands.includes(commandName)) {
-      // Уже обработано в command.ts
       return;
     }
   }
 
-  // Показываем индикатор набора текста
+  // Показываем индикатор набора текста в нужной теме
   await ctx.replyWithChatAction('typing');
 
   // Интервал отправки typing для долгих запросов/вызовов инструментов
@@ -114,7 +116,7 @@ export async function handleIncomingMessage(ctx: Context): Promise<void> {
       }
     }
 
-    // Собираем контекст с учетом Reply Chain и системного промпта
+    // Собираем контекст с учетом истории текущей темы и системного промпта
     const messages = await buildConversationContext({
       ctx,
       botUsername,
@@ -125,13 +127,19 @@ export async function handleIncomingMessage(ctx: Context): Promise<void> {
     const rawAnswer = await generateAIResponse(messages, {
       groupId: ctx.chat?.id.toString() || '',
       author: currentUserName,
+      threadId: topicInfo.threadId,
     });
 
     // Форматируем в безопасный Telegram HTML
     const formattedHtml = formatAIResponseToHTML(rawAnswer);
 
-    // Отправляем ответ частями с защитой от 429
-    const sentMsgId = await sendLongMessage(ctx, formattedHtml, message.message_id);
+    // Отправляем ответ частями с защитой от 429 в нужный топик
+    const sentMsgId = await sendLongMessage(
+      ctx,
+      formattedHtml,
+      message.message_id,
+      topicInfo.rawThreadId
+    );
 
     // Сохраняем ответ ассистента в базу данных
     if (sentMsgId) {
@@ -151,6 +159,7 @@ export async function handleIncomingMessage(ctx: Context): Promise<void> {
       `⚠️ Произошла ошибка при обработке запроса:\n<code>${errorDetails}</code>`,
       {
         parse_mode: 'HTML',
+        message_thread_id: topicInfo.rawThreadId,
         reply_parameters: { message_id: message.message_id },
       }
     );

@@ -30,6 +30,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_thread_msg ON messages(thread_id, msg_id);
   CREATE INDEX IF NOT EXISTS idx_messages_msg_id ON messages(msg_id);
 
+  CREATE TABLE IF NOT EXISTS topics (
+    chat_id TEXT NOT NULL,
+    thread_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, thread_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_topics_chat ON topics(chat_id);
+
   CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     group_id TEXT NOT NULL,
@@ -70,6 +80,13 @@ export interface StoredNote {
   updated_at: number;
 }
 
+export interface StoredTopic {
+  chat_id: string;
+  thread_id: number;
+  name: string;
+  updated_at: number;
+}
+
 const insertMessageStmt = db.prepare(`
   INSERT INTO messages (thread_id, msg_id, reply_to_msg_id, author, role, content, created_at)
   VALUES (@thread_id, @msg_id, @reply_to_msg_id, @author, @role, @content, @created_at)
@@ -83,8 +100,40 @@ const getRecentMessagesStmt = db.prepare(`
   SELECT * FROM messages WHERE thread_id = ? ORDER BY id DESC LIMIT ?
 `);
 
+const getRecentMessagesWithGeneralStmt = db.prepare(`
+  SELECT * FROM messages WHERE thread_id = ? OR thread_id = ? ORDER BY id DESC LIMIT ?
+`);
+
 const deleteMessagesByThreadStmt = db.prepare(`
   DELETE FROM messages WHERE thread_id = ?
+`);
+
+const deleteMessagesByThreadGeneralStmt = db.prepare(`
+  DELETE FROM messages WHERE thread_id = ? OR thread_id = ?
+`);
+
+const getThreadMessageCountStmt = db.prepare(`
+  SELECT count(*) as count FROM messages WHERE thread_id = ?
+`);
+
+const upsertTopicStmt = db.prepare(`
+  INSERT INTO topics (chat_id, thread_id, name, updated_at)
+  VALUES (@chat_id, @thread_id, @name, @updated_at)
+  ON CONFLICT(chat_id, thread_id) DO UPDATE SET
+    name = excluded.name,
+    updated_at = excluded.updated_at
+`);
+
+const getTopicStmt = db.prepare(`
+  SELECT * FROM topics WHERE chat_id = ? AND thread_id = ? LIMIT 1
+`);
+
+const listTopicsStmt = db.prepare(`
+  SELECT * FROM topics WHERE chat_id = ? ORDER BY thread_id ASC
+`);
+
+const deleteTopicStmt = db.prepare(`
+  DELETE FROM topics WHERE chat_id = ? AND thread_id = ?
 `);
 
 const upsertNoteStmt = db.prepare(`
@@ -169,13 +218,53 @@ export const dbService = {
   },
 
   getRecentMessages(threadId: string, limit = 20): StoredMessage[] {
+    // Если это общая тема вида chatId_1, захватываем и старый формат chatId
+    if (threadId.endsWith('_1')) {
+      const baseChatId = threadId.slice(0, -2);
+      const rows = getRecentMessagesWithGeneralStmt.all(threadId, baseChatId, limit) as StoredMessage[];
+      return rows.reverse();
+    }
     const rows = getRecentMessagesStmt.all(threadId, limit) as StoredMessage[];
     return rows.reverse(); // вернуть в хронологическом порядке
   },
 
   clearThread(threadId: string): number {
+    if (threadId.endsWith('_1')) {
+      const baseChatId = threadId.slice(0, -2);
+      const result = deleteMessagesByThreadGeneralStmt.run(threadId, baseChatId);
+      return Number(result.changes);
+    }
     const result = deleteMessagesByThreadStmt.run(threadId);
     return Number(result.changes);
+  },
+
+  getThreadMessageCount(threadId: string): number {
+    const row = getThreadMessageCountStmt.get(threadId) as { count: number } | undefined;
+    return row ? row.count : 0;
+  },
+
+  saveTopic(chatId: string, threadId: number, name: string): void {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    upsertTopicStmt.run({
+      chat_id: chatId,
+      thread_id: threadId,
+      name: trimmed,
+      updated_at: Date.now(),
+    });
+  },
+
+  getTopic(chatId: string, threadId: number): StoredTopic | undefined {
+    return getTopicStmt.get(chatId, threadId) as StoredTopic | undefined;
+  },
+
+  listTopics(chatId: string): StoredTopic[] {
+    return listTopicsStmt.all(chatId) as StoredTopic[];
+  },
+
+  deleteTopic(chatId: string, threadId: number): boolean {
+    const result = deleteTopicStmt.run(chatId, threadId);
+    return result.changes > 0;
   },
 
   saveNote(params: {

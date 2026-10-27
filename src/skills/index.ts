@@ -9,6 +9,7 @@ import {
   getGroupNotesToolDefinition,
   saveGroupNoteToolDefinition,
 } from './group-notes.js';
+import { executeSetTopicName, setTopicNameToolDefinition } from './topic.js';
 
 export const availableTools: ChatCompletionTool[] = [
   datetimeToolDefinition,
@@ -16,11 +17,13 @@ export const availableTools: ChatCompletionTool[] = [
   saveGroupNoteToolDefinition,
   getGroupNotesToolDefinition,
   deleteGroupNoteToolDefinition,
+  setTopicNameToolDefinition,
 ];
 
 export interface ToolExecutionContext {
   groupId: string;
   author: string;
+  threadId?: number;
 }
 
 export async function executeTool(
@@ -56,6 +59,11 @@ export async function executeTool(
     case 'delete_group_note':
       return executeDeleteGroupNote(context.groupId, {
         key: parsedArgs.key || '',
+      });
+
+    case 'set_topic_name':
+      return executeSetTopicName(context.groupId, context.threadId, {
+        name: parsedArgs.name || '',
       });
 
     default:

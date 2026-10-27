@@ -10,6 +10,7 @@ import {
   handleNotesCommand,
   handleStatusCommand,
   handleSummaryCommand,
+  handleTopicCommand,
 } from './handlers/command.js';
 import { handleIncomingMessage } from './handlers/message.js';
 import { getModelPoolStatus } from './services/ai.js';
@@ -20,16 +21,50 @@ export const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 // 2. Middleware строгой изоляции: пускает ТОЛЬКО ALLOWED_GROUP_ID
 bot.use(groupGuard);
 
-// 3. Регистрация базовых сервисных команд группы
+// 3. Middleware поддержки тем (форума): гарантирует отправку ответов в нужный топик
+bot.use(async (ctx, next) => {
+  if (ctx.message?.message_thread_id) {
+    const threadId = ctx.message.message_thread_id;
+    const origReply = ctx.reply.bind(ctx);
+    ctx.reply = ((text: any, other?: any, signal?: any) => {
+      return origReply(text, { message_thread_id: threadId, ...other }, signal);
+    }) as typeof ctx.reply;
+  }
+  return next();
+});
+
+// 4. Регистрация базовых сервисных команд группы
 bot.command('help', handleHelpCommand);
 bot.command('start', handleHelpCommand);
+bot.command(['topic', 'thread'], handleTopicCommand);
 bot.command('clear', handleClearCommand);
 bot.command('notes', handleNotesCommand);
 bot.command(['delnote', 'del', 'done'], handleDeleteNoteCommand);
 bot.command(['status', 'model', 'models'], handleStatusCommand);
 bot.command('summary', handleSummaryCommand);
 
-// 4. Регистрация обработчика входящих сообщений (текст и фото)
+// 5. Обработчики сервисных событий форума Telegram (создание и редактирование тем)
+bot.on('message:forum_topic_created', async (ctx) => {
+  const created = ctx.message.forum_topic_created;
+  const threadId = ctx.message.message_id;
+  const chatId = ctx.chat.id.toString();
+  if (created?.name && threadId) {
+    dbService.saveTopic(chatId, threadId, created.name);
+    console.log(`[Topic] Создана новая тема: "${created.name}" (ID: ${threadId}) в группе ${chatId}`);
+  }
+});
+
+bot.on('message:forum_topic_edited', async (ctx) => {
+  const edited = ctx.message.forum_topic_edited;
+  const threadId = ctx.message.message_thread_id;
+  const chatId = ctx.chat.id.toString();
+  if (edited?.name && threadId) {
+    dbService.saveTopic(chatId, threadId, edited.name);
+    console.log(`[Topic] Тема обновлена: "${edited.name}" (ID: ${threadId}) в группе ${chatId}`);
+  }
+});
+
+// 6. Регистрация обработчика входящих сообщений (текст и фото)
 bot.on(['message:text', 'message:photo'], handleIncomingMessage);
 
 // 5. Глобальный обработчик ошибок grammY

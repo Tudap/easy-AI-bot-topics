@@ -61,10 +61,12 @@ export function splitIntoChunks(text: string, maxLen = MAX_CHUNK_LENGTH): string
 export async function sendLongMessage(
   ctx: Context,
   text: string,
-  replyToMessageId?: number
+  replyToMessageId?: number,
+  threadId?: number
 ): Promise<number | undefined> {
   const chunks = splitIntoChunks(text);
   let firstSentMessageId: number | undefined;
+  const messageThreadId = threadId ?? ctx.message?.message_thread_id;
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
@@ -72,6 +74,7 @@ export async function sendLongMessage(
 
     const extra: Parameters<typeof ctx.reply>[1] = {
       parse_mode: 'HTML',
+      message_thread_id: messageThreadId,
       reply_parameters: isFirstChunk && replyToMessageId ? { message_id: replyToMessageId } : undefined,
     };
 
@@ -87,6 +90,7 @@ export async function sendLongMessage(
       try {
         const plainText = chunk.replace(/<[^>]*>/g, '');
         const sent = await ctx.reply(plainText, {
+          message_thread_id: messageThreadId,
           reply_parameters: isFirstChunk && replyToMessageId ? { message_id: replyToMessageId } : undefined,
         });
         if (isFirstChunk && sent?.message_id) {
