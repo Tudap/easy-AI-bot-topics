@@ -44,6 +44,12 @@ bot.command(['status', 'model', 'models'], handleStatusCommand);
 bot.command('summary', handleSummaryCommand);
 
 // 5. Обработчики сервисных событий форума Telegram (создание и редактирование тем)
+bot.on('message:migrate_to_chat_id', async (ctx) => {
+  const newChatId = ctx.message.migrate_to_chat_id;
+  console.log(`[Telegram Migration] 🔄 Группа мигрировала в супергруппу с новым ID: ${newChatId}`);
+  console.log(`[Telegram Migration] 👉 Пожалуйста, обновите в .env: ALLOWED_GROUP_ID=${newChatId}`);
+});
+
 bot.on('message:forum_topic_created', async (ctx) => {
   const created = ctx.message.forum_topic_created;
   const threadId = ctx.message.message_id;

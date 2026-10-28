@@ -28,11 +28,24 @@ export function shouldReply(ctx: Context, botUsername: string): boolean {
     return true;
   }
 
-  // 2. Прямое упоминание @botusername
+  // 2. Прямое упоминание @botusername через регулярное выражение
   if (botUsername) {
     const mentionRegex = new RegExp(`@${botUsername}\\b`, 'i');
     if (mentionRegex.test(text)) {
       return true;
+    }
+
+    // 2.1 Проверка entities типа mention
+    const entities = message.entities || message.caption_entities;
+    if (entities) {
+      for (const ent of entities) {
+        if (ent.type === 'mention') {
+          const mentionText = text.substring(ent.offset, ent.offset + ent.length).replace(/^@/, '');
+          if (mentionText.toLowerCase() === botUsername.toLowerCase()) {
+            return true;
+          }
+        }
+      }
     }
   }
 
@@ -51,7 +64,7 @@ export async function handleIncomingMessage(ctx: Context): Promise<void> {
   const message = ctx.message;
   if (!message) return;
 
-  const botUsername = ctx.me.username;
+  const botUsername = ctx.me?.username || '';
   const topicInfo = getTopicInfo(ctx);
   const threadId = topicInfo.storageThreadId;
   const currentUserName = formatUserName(message.from);
@@ -96,8 +109,12 @@ export async function handleIncomingMessage(ctx: Context): Promise<void> {
     }
   }
 
+  console.log(
+    `[Handler] 📩 Обработка обращения в теме «${topicInfo.name}» (ID: ${topicInfo.threadId ?? 1}) от ${currentUserName}: "${rawText}"`
+  );
+
   // Показываем индикатор набора текста в нужной теме
-  await ctx.replyWithChatAction('typing');
+  ctx.replyWithChatAction('typing').catch(() => {});
 
   // Интервал отправки typing для долгих запросов/вызовов инструментов
   const typingInterval = setInterval(() => {
@@ -152,6 +169,8 @@ export async function handleIncomingMessage(ctx: Context): Promise<void> {
         content: rawAnswer,
       });
     }
+
+    console.log(`[Handler] ✅ Ответ успешно отправлен в тему «${topicInfo.name}»`);
   } catch (err: unknown) {
     console.error('[Handler] Error processing message:', err);
     const errorDetails = err instanceof Error ? err.message : String(err);
